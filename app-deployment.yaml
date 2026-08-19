@@ -122,6 +122,7 @@ spec:
       containers:
       - name: waf
         image: my-local-caddy-coraza:latest
+        imagePullPolicy: Never 
         resources:
           limits:
             cpu: "2.0"
