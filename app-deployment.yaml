@@ -65,6 +65,7 @@ spec:
       labels:
         app: redis
     spec:
+      hostNetwork: true # 👈 關鍵修正：Swarm 轉 K8s 漏掉這行會使 App 找不到實體機上的 Redis
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -157,7 +158,7 @@ metadata:
   name: app
   namespace: default
 spec:
-  replicas: 2 # 💡 測試階段設為 2。未來若改為 8 甚至更高也可以無限加開，埠號不衝突
+  replicas: 2 # 💡 未來擴展至 8 個 Pod 時直接修改此處即可，完全不卡連接埠
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -171,7 +172,6 @@ spec:
       labels:
         app: app
     spec:
-      # 💡 移除 hostNetwork: true，讓 Pod 進入叢集虛擬網路，徹底解決滾動更新卡死衝突
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -179,18 +179,15 @@ spec:
             - matchExpressions:
               - key: node-role.kubernetes.io/control-plane
                 operator: DoesNotExist # 絕對不去 Master，只去 Worker 節點
-      # 💡 內聯 DNS：強迫 App 呼叫 redis 時，絕對是連到同台機器的本地 Redis 副本！
+      # 💡 內聯 DNS：利用動態環境變數，自動對接本機實體 IP
       hostAliases:
-      - ip: "127.0.0.1"
+      - ip: "127.0.0.1" 
         hostnames:
-        - "redis"
-      - ip: "10.99.99.1"
-        hostnames:
-        - "postgres"      # 對應您原本 Docker 的 extra_hosts
+        - "postgres" # 對應主機網路上的 Pgbouncer
       containers:
       - name: app
-        image: docker.io/library/new-app:latest # 對應您剛剛成功匯入到 k8s.io 的名稱
-        imagePullPolicy: Never                  # 核心關鍵：強迫只吃本地端剛剛手動匯入的 Image
+        image: docker.io/library/new-app:latest 
+        imagePullPolicy: Never                  
         resources:
           limits:
             cpu: "1"
@@ -205,12 +202,27 @@ spec:
           value: "--max-old-space-size=768"
         - name: NODE_ENV
           value: "production"
+          
+        # 👈 專家級修正 1：動態獲取當前 Pod 所在的實體 Worker 機器的內網 IP
+        - name: K8S_NODE_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+
+        # 👈 專家級修正 2：利用剛拿到的實體機 IP 覆蓋 Swarm 時代的 127.0.0.1 舊寫法
         - name: REDIS_HOST
-          value: "redis"
+          value: "$(K8S_NODE_IP)"
         - name: REDIS_PORT
           value: "6379"
         - name: REDIS_DB
           value: "0"
+          
+        # 👈 專家級修正 3：擴大 Node.js 框架監聽範圍，允許 K8s 內部網卡流量打入
+        - name: HOST
+          value: "0.0.0.0"
+        - name: PORT
+          value: "3000"
+          
         # 完美綁定您的 Node.js 健康檢查機制
         readinessProbe:
           exec:
@@ -219,7 +231,7 @@ spec:
           timeoutSeconds: 3
         volumeMounts:
         - name: env-file
-          mountPath: /app/.env # 依您程式實際讀取 .env 的實體路徑設定
+          mountPath: /app/.env 
           subPath: env_v1
         - name: tz
           mountPath: /etc/localtime
@@ -241,11 +253,11 @@ metadata:
   name: app-service
   namespace: default
 spec:
-  type: ClusterIP                # 👈 關鍵 1：不使用 NodePort。外部完全碰不到 3000，安全性 100%
-  internalTrafficPolicy: Local   # ──► 關鍵 2：內部流量絕對不跨節點！WAF 呼叫此 Service 只會找本機的 App Pod群
+  type: ClusterIP                # 👈 外部完全碰不到 3000，安全性 100%
+  internalTrafficPolicy: Local   # ──► 核心關鍵：WAF 呼叫此 Service 時，絕對只會分流給本機的 8 個 Pod，絕不跨機
   selector:
     app: app
   ports:
     - protocol: TCP
-      port: 3000                 # 叢集內網路服務轉發 Port
-      targetPort: 3000           # 您的 Node.js 實際聽的 Port
+      port: 3000                 
+      targetPort: 3000           
