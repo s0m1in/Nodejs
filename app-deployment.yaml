@@ -193,10 +193,10 @@ spec:
         imagePullPolicy: Never                  # 核心關鍵：強迫只吃本地端剛剛手動匯入的 Image
         resources:
           limits:
-            cpu: "1.0"
-            memory: 1024Mi
+            cpu: "1"
+            memory: 1Gi
           requests:
-            cpu: "0.5"
+            cpu: 500m
             memory: 512Mi
         env:
         - name: TZ
@@ -215,7 +215,7 @@ spec:
         readinessProbe:
           exec:
             command: ["/nodejs/bin/node", "-e", "require('net').createConnection(3000).on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
-          interval: 10s
+          periodSeconds: 10
           timeoutSeconds: 3
         volumeMounts:
         - name: env-file
