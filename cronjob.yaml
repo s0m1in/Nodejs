@@ -1,0 +1,64 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: telegram-hourly
+  namespace: default
+spec:
+  schedule: "0 * * * *" # 每小時執行一次
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          nodeSelector:
+            # 👈 關鍵：用主控台或特定主機的 hostname 標籤，限定它在指定機器上跑
+            kubernetes.io/hostname: chunk01 
+          restartPolicy: OnFailure
+          hostAliases:
+          - ip: "10.99.99.1"
+            hostnames:
+            - "postgres"
+          containers:
+          - name: report
+            image: new-app:latest
+            command: ["/nodejs/bin/node", "/app/scripts/entrypoint.js", "/nodejs/bin/node", "/app/scripts/telegram-report.js", "hourly"]
+            volumeMounts:
+            - name: env-file
+              mountPath: /app/.env
+              subPath: env_v1
+          volumes:
+          - name: env-file
+            secret:
+              secretName: env-v4
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: telegram-daily
+  namespace: default
+spec:
+  schedule: "0 0 * * *" # 每天午夜執行一次
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          nodeSelector:
+            kubernetes.io/hostname: chunk01
+          restartPolicy: OnFailure
+          hostAliases:
+          - ip: "10.99.99.1"
+            hostnames:
+            - "postgres"
+          containers:
+          - name: report
+            image: new-app:latest
+            command: ["/nodejs/bin/node", "/app/scripts/entrypoint.js", "/nodejs/bin/node", "/app/scripts/telegram-report.js", "daily"]
+            volumeMounts:
+            - name: env-file
+              mountPath: /app/.env
+              subPath: env_v1
+          volumes:
+          - name: env-file
+            secret:
+              secretName: env-v4
