@@ -1,0 +1,255 @@
+# ==========================================
+# 1. PGBOUNCER (原本的 mode: global)
+# ==========================================
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: pgbouncer
+  namespace: default
+spec:
+  selector:
+    matchLabels:
+      app: pgbouncer
+  template:
+    metadata:
+      labels:
+        app: pgbouncer
+    spec:
+      hostNetwork: true # 👈 關鍵：對應 mode: host，直接綁定在實體機的 6432
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role.kubernetes.io/control-plane
+                operator: DoesNotExist # 👈 關鍵：絕對不去 Master，只去 Worker
+      containers:
+      - name: pgbouncer
+        image: edoburu/pgbouncer:latest
+        resources:
+          limits:
+            cpu: "1.0"
+            memory: 256Mi
+        securityContext:
+          capabilities:
+            add: ["SYS_RESOURCE"] # 允許提高 ulimits
+        volumeMounts:
+        - name: config
+          mountPath: /etc/pgbouncer/pgbouncer.ini
+          subPath: pgbouncer.ini
+        - name: users
+          mountPath: /etc/pgbouncer/userlist.txt
+          subPath: userlist.txt
+      volumes:
+      - name: config
+        configMap:
+          name: pgbouncer-config-v2
+      - name: users
+        secret:
+          secretName: pgbouncer-users-v2
+---
+# ==========================================
+# 2. REDIS (原本的 mode: global)
+# ==========================================
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: redis
+  namespace: default
+spec:
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role.kubernetes.io/control-plane
+                operator: DoesNotExist
+      containers:
+      - name: redis
+        image: redis:7-alpine
+        command: ["redis-server", "/etc/redis/redis.conf"]
+        env:
+        - name: TZ
+          value: "Asia/Hong_Kong"
+        volumeMounts:
+        - name: config
+          mountPath: /etc/redis/redis.conf
+          subPath: redis.conf
+        - name: tz
+          mountPath: /etc/localtime
+          readOnly: true
+      volumes:
+      - name: config
+        configMap:
+          name: redis-config-v2
+      - name: tz
+        hostPath:
+          path: /etc/localtime
+---
+# ==========================================
+# 3. WAF (Caddy + Coraza，原本的 mode: global)
+# ==========================================
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: waf
+  namespace: default
+spec:
+  selector:
+    matchLabels:
+      app: waf
+  template:
+    metadata:
+      labels:
+        app: waf
+    spec:
+      hostNetwork: true # 👈 關鍵：保持 Host 模式，確保精準抓到真實 IP
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role.kubernetes.io/control-plane
+                operator: DoesNotExist
+      # 💡 完美繼承您的 sysctls 內核微調
+      securityContext:
+        sysctls:
+        - name: net.core.somaxconn
+          value: "65535"
+        - name: net.ipv4.tcp_max_syn_backlog
+          value: "65535"
+        - name: net.ipv4.tcp_fastopen
+          value: "3"
+      containers:
+      - name: waf
+        image: my-local-caddy-coraza:latest
+        resources:
+          limits:
+            cpu: "2.0"
+            memory: 2Gi
+          requests:
+            cpu: "0.5"
+            memory: 512Mi
+        env:
+        - name: TZ
+          value: "Asia/Hong_Kong"
+        volumeMounts:
+        - name: config
+          mountPath: /etc/caddy/Caddyfile
+          subPath: Caddyfile
+        - name: tz
+          mountPath: /etc/localtime
+          readOnly: true
+      volumes:
+      - name: config
+        configMap:
+          name: caddy-config-v7
+      - name: tz
+        hostPath:
+          path: /etc/localtime
+---
+# ==========================================
+# 4. APP (原本的 replicated 模式)
+# ==========================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+  namespace: default
+spec:
+  replicas: 2 # 您目前的 2 台 Worker（未來增加 Worker 再拉大）
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1        # 先開一個新 Pod
+      maxUnavailable: 0  # 舊的不能先關，確保更新不中斷（對應 start-first）
+  selector:
+    matchLabels:
+      app: app
+  template:
+    metadata:
+      labels:
+        app: app
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: node-role.kubernetes.io/control-plane
+                operator: DoesNotExist
+      # 💡 K3s 內置的高級功能：強迫 App 就近連線本機的 Redis
+      hostAliases:
+      - ip: "127.0.0.1"
+        hostnames:
+        - "redis"        # 這樣您的 App 呼叫 redis 時，絕對是連到同台機器的 Redis 副本！
+      - ip: "10.99.99.1"
+        hostnames:
+        - "postgres"      # 對應原本的 extra_hosts
+      containers:
+      - name: app
+        image: new-app:latest
+        resources:
+          limits:
+            cpu: "1.0"
+            memory: 1024Mi
+          requests:
+            cpu: "0.5"
+            memory: 512Mi
+        env:
+        - name: TZ
+          value: "Asia/Hong_Kong"
+        - name: NODE_OPTIONS
+          value: "--max-old-space-size=768"
+        - name: NODE_ENV
+          value: "production"
+        - name: REDIS_HOST
+          value: "redis"
+        - name: REDIS_PORT
+          value: "6379"
+        - name: REDIS_DB
+          value: "0"
+        # 繼承您的 Node.js 健康檢查
+        readinessProbe:
+          exec:
+            command: ["/nodejs/bin/node", "-e", "require('net').createConnection(3000).on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
+          interval: 10s
+          timeoutSeconds: 3
+        volumeMounts:
+        - name: env-file
+          mountPath: /app/.env # 依您程式實際讀取 .env 的路徑設定
+          subPath: env_v1
+        - name: tz
+          mountPath: /etc/localtime
+          readOnly: true
+      volumes:
+      - name: env-file
+        secret:
+          secretName: env-v6
+      - name: tz
+        hostPath:
+          path: /etc/localtime
+apiVersion: v1
+kind: Service
+metadata:
+  name: app-service
+  namespace: default
+spec:
+  type: NodePort
+  internalTrafficPolicy: Local   # ───► 內部流量絕對不跨節點！
+  externalTrafficPolicy: Local   # ───► 外部流量進來，只給本機的 App！
+  selector:
+    app: app
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 3000           # 您的 Node.js 實際聽的 Port
+      nodePort: 30080            # 每台機器實體對外的 Port
