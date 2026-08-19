@@ -197,6 +197,7 @@ spec:
       containers:
       - name: app
         image: new-app:latest
+        imagePullPolicy: Never
         resources:
           limits:
             cpu: "1.0"
