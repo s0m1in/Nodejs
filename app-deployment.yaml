@@ -149,7 +149,7 @@ spec:
           path: /etc/localtime
 ---
 # ==========================================
-# 4. APP (原本的 replicated 模式)
+# 4. APP (原本的 replicated 模式 -> Deployment)
 # ==========================================
 apiVersion: apps/v1
 kind: Deployment
@@ -157,12 +157,12 @@ metadata:
   name: app
   namespace: default
 spec:
-  replicas: 2 # 您目前的 2 台 Worker（未來增加 Worker 再拉大）
+  replicas: 2 # 您目前的 2 台 Worker 節點各分派一個 Pod
   strategy:
     type: RollingUpdate
     rollingUpdate:
       maxSurge: 1        # 先開一個新 Pod
-      maxUnavailable: 0  # 舊的不能先關，確保更新不中斷（對應 start-first）
+      maxUnavailable: 0  # 舊的不能先關，確保更新時流量不中斷
   selector:
     matchLabels:
       app: app
@@ -177,19 +177,19 @@ spec:
             nodeSelectorTerms:
             - matchExpressions:
               - key: node-role.kubernetes.io/control-plane
-                operator: DoesNotExist
-      # 💡 K3s 內置的高級功能：強迫 App 就近連線本機的 Redis
+                operator: DoesNotExist # 絕對不去 Master，只去 Worker 節點
+      # 💡 內聯 DNS：強迫 App 呼叫 redis 時，絕對是連到同台機器的本地 Redis 副本！
       hostAliases:
       - ip: "127.0.0.1"
         hostnames:
-        - "redis"        # 這樣您的 App 呼叫 redis 時，絕對是連到同台機器的 Redis 副本！
+        - "redis"        
       - ip: "10.99.99.1"
         hostnames:
-        - "postgres"      # 對應原本的 extra_hosts
+        - "postgres"      # 對應您原本 Docker 的 extra_hosts
       containers:
       - name: app
-        image: new-app:latest
-        imagePullPolicy: Never
+        image: docker.io/library/new-app:latest # 對應您剛剛成功匯入到 k8s.io 的名稱
+        imagePullPolicy: Never                  # 核心關鍵：強迫只吃本地端剛剛手動匯入的 Image
         resources:
           limits:
             cpu: "1.0"
@@ -210,7 +210,7 @@ spec:
           value: "6379"
         - name: REDIS_DB
           value: "0"
-        # 繼承您的 Node.js 健康檢查
+        # 完美綁定您的 Node.js 健康檢查機制
         readinessProbe:
           exec:
             command: ["/nodejs/bin/node", "-e", "require('net').createConnection(3000).on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
@@ -218,7 +218,7 @@ spec:
           timeoutSeconds: 3
         volumeMounts:
         - name: env-file
-          mountPath: /app/.env # 依您程式實際讀取 .env 的路徑設定
+          mountPath: /app/.env # 依您程式實際讀取 .env 的實體路徑設定
           subPath: env_v1
         - name: tz
           mountPath: /etc/localtime
