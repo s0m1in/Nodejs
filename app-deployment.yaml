@@ -122,7 +122,7 @@ spec:
       containers:
       - name: waf
         image: my-local-caddy-coraza:latest
-        imagePullPolicy: Never 
+        imagePullPolicy: Never
         resources:
           limits:
             cpu: "2.0"
@@ -157,7 +157,7 @@ metadata:
   name: app
   namespace: default
 spec:
-  replicas: 2 # 您目前的 2 台 Worker 節點各分派一個 Pod
+  replicas: 2 # 💡 測試階段設為 2。未來若改為 8 甚至更高也可以無限加開，埠號不衝突
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -171,7 +171,7 @@ spec:
       labels:
         app: app
     spec:
-      hostNetwork: true # 👈 關鍵：開啟主機網路空間，與 WAF 實現同機記憶體級通訊
+      # 💡 移除 hostNetwork: true，讓 Pod 進入叢集虛擬網路，徹底解決滾動更新卡死衝突
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -183,7 +183,7 @@ spec:
       hostAliases:
       - ip: "127.0.0.1"
         hostnames:
-        - "redis"        
+        - "redis"
       - ip: "10.99.99.1"
         hostnames:
         - "postgres"      # 對應您原本 Docker 的 extra_hosts
@@ -211,15 +211,10 @@ spec:
           value: "6379"
         - name: REDIS_DB
           value: "0"
-        # 👈 關鍵：強制 App 框架僅監聽本機 127.0.0.1，外部實體網路完全無法探測 3000 連接埠
-        - name: HOST
-          value: "127.0.0.1"
-        - name: PORT
-          value: "3000"
-        # 完美綁定您的 Node.js 健康檢查機制（因 hostNetwork 關係，改呼叫 127.0.0.1 安全對接）
+        # 完美綁定您的 Node.js 健康檢查機制
         readinessProbe:
           exec:
-            command: ["/nodejs/bin/node", "-e", "require('net').createConnection(3000, '127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
+            command: ["/nodejs/bin/node", "-e", "require('net').createConnection(3000).on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
           interval: 10s
           timeoutSeconds: 3
         volumeMounts:
@@ -236,3 +231,21 @@ spec:
       - name: tz
         hostPath:
           path: /etc/localtime
+---
+# ==========================================
+# 5. SERVICE (鎖死跨節點流量，流量在地化)
+# ==========================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: app-service
+  namespace: default
+spec:
+  type: ClusterIP                # 👈 關鍵 1：不使用 NodePort。外部完全碰不到 3000，安全性 100%
+  internalTrafficPolicy: Local   # ──► 關鍵 2：內部流量絕對不跨節點！WAF 呼叫此 Service 只會找本機的 App Pod群
+  selector:
+    app: app
+  ports:
+    - protocol: TCP
+      port: 3000                 # 叢集內網路服務轉發 Port
+      targetPort: 3000           # 您的 Node.js 實際聽的 Port
