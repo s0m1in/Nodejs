@@ -119,15 +119,6 @@ spec:
             - matchExpressions:
               - key: node-role.kubernetes.io/control-plane
                 operator: DoesNotExist
-      # 💡 完美繼承您的 sysctls 內核微調
-      securityContext:
-        sysctls:
-        - name: net.core.somaxconn
-          value: "65535"
-        - name: net.ipv4.tcp_max_syn_backlog
-          value: "65535"
-        - name: net.ipv4.tcp_fastopen
-          value: "3"
       containers:
       - name: waf
         image: my-local-caddy-coraza:latest
