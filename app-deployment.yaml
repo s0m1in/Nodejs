@@ -230,6 +230,10 @@ spec:
       - name: tz
         hostPath:
           path: /etc/localtime
+--- # 👈 【完美復活關鍵：這裡補上了獨立一行的分隔線！】
+# ==========================================
+# 5. SERVICE (鎖死跨節點流量，流量在地化)
+# ==========================================
 apiVersion: v1
 kind: Service
 metadata:
