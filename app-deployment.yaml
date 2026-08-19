@@ -254,7 +254,7 @@ metadata:
   name: app-service
   namespace: default
 spec:
-  ClusterIP: None                # 👈 外部完全碰不到 3000，安全性 100%
+  clusterIP: None                # 👈 外部完全碰不到 3000，安全性 100%
   internalTrafficPolicy: Local   # ──► 核心關鍵：WAF 呼叫此 Service 時，絕對只會分流給本機的 8 個 Pod，絕不跨機
   selector:
     app: app
