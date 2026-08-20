@@ -112,8 +112,7 @@ spec:
       labels:
         app: waf
     spec:
-      hostNetwork: true # 👈 保持 Host 模式，免去 K3s 權限限制，完美合法聽在實體機 80/443
-      dnsPolicy: ClusterFirstWithHostNet # 👈 關鍵防線 1：強迫 Host 容器共享 K8s 內部 CoreDNS 解析！
+      hostNetwork: true # 免特權合法聽在實體機 80/8080 埠
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -135,6 +134,9 @@ spec:
         env:
         - name: TZ
           value: "Asia/Hong_Kong"
+        # 👈 終極解法：利用 K8s 內建機制，直接把動態的 Service ClusterIP 轉為大寫環境變數注入 Caddy！
+        - name: K8S_APP_SERVICE_IP
+          value: app-service.default.svc.cluster.local
         volumeMounts:
         - name: config
           mountPath: /etc/caddy/Caddyfile
@@ -159,12 +161,12 @@ metadata:
   name: app
   namespace: default
 spec:
-  replicas: 2 # 💡 支援單機無限擴充 8 個或更多 Pod，埠號完全不衝突！
+  replicas: 2 # 💡 未來擴展至 8 個 Pod 時直接修改此處即可，完全不卡連接埠
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxSurge: 1        # 💡 先開新 Pod，完美支援零中斷平滑更新
-      maxUnavailable: 0  
+      maxSurge: 1        # 先開一個新 Pod
+      maxUnavailable: 0  # 舊的不能先關，確保更新時流量不中斷
   selector:
     matchLabels:
       app: app
@@ -179,11 +181,11 @@ spec:
             nodeSelectorTerms:
             - matchExpressions:
               - key: node-role.kubernetes.io/control-plane
-                operator: DoesNotExist
+                operator: DoesNotExist # 絕對不去 Master，只去 Worker 節點
       hostAliases:
       - ip: "127.0.0.1" 
         hostnames:
-        - "postgres" 
+        - "postgres" # 對應主機網路上的 Pgbouncer
       containers:
       - name: app
         image: docker.io/library/new-app:latest 
@@ -207,13 +209,13 @@ spec:
             fieldRef:
               fieldPath: status.hostIP
         - name: REDIS_HOST
-          value: "$(K8S_NODE_IP)" # 動態綁定本機 Redis
+          value: "$(K8S_NODE_IP)" # 動態對接本機 Redis
         - name: REDIS_PORT
           value: "6379"
         - name: REDIS_DB
           value: "0"
         - name: HOST
-          value: "0.0.0.0" # 擴大監聽，允許 Service 流量灌入
+          value: "0.0.0.0" # 擴大監聽範圍，接收 Service 流量
         - name: PORT
           value: "3000"
         readinessProbe:
@@ -237,7 +239,7 @@ spec:
           path: /etc/localtime
 ---
 # ==========================================
-# 5. SERVICE (無頭模式，徹底消滅虛擬網卡死鎖)
+# 5. SERVICE (回歸常規虛擬 IP，不跨節點流量)
 # ==========================================
 apiVersion: v1
 kind: Service
@@ -245,8 +247,8 @@ metadata:
   name: app-service
   namespace: default
 spec:
-  clusterIP: None                # 👈 關鍵防線 2：改為 None！銷毀 10.43 亂源。外部找不到 3000，安全性封頂
-  internalTrafficPolicy: Local   # ──► 關鍵防線 3：鎖死在本機！DNS 絕對只會給出「當前這台機器」的 Pod IP 群
+  type: ClusterIP                # 👈 改回常規模式，徹底終結 None Service 導致 Caddyfile 讀不出 Port 的通病
+  internalTrafficPolicy: Local   # ──► 核心防線：流量絕對鎖死在本機！絕不跨機
   selector:
     app: app
   ports:
