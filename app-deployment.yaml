@@ -169,12 +169,6 @@ spec:
         app: app
     spec:
       hostNetwork: false # 👈 關鍵 3：必須關閉主機網路！改走 K8s 虛擬網路，同主機的多個 Pod 才不會互撞 Port 3000
-      securityContext:
-        sysctls:
-        - name: net.core.somaxconn
-          value: "65535"
-        - name: net.ipv4.tcp_max_syn_backlog
-          value: "65535"
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
