@@ -229,7 +229,7 @@ spec:
           timeoutSeconds: 3
         volumeMounts:
         - name: env-file
-          mountPath: /app/env_v1
+          mountPath: /run/secrets/env_v1
           subPath: env_v1
         - name: tz
           mountPath: /etc/localtime
