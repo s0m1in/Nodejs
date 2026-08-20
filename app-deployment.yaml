@@ -158,8 +158,7 @@ metadata:
   name: app
   namespace: default
 spec:
-  replicas: 2 # 💡 叢集內有幾台 Worker 就設幾複本（如 2）。單機擴充效能改用容器內 cluster 機制
-  # 👇 關鍵優化：因為要佔用實體 3000 hostPort，更新時必須先刪後開，空出埠號，ArgoCD 永不卡死
+  replicas: 2 # 💡 叢集內有幾台 Worker 就設幾複本（如 2）。
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -174,14 +173,12 @@ spec:
         app: app
     spec:
       affinity:
-        # 1. 限制只去 Worker 節點
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
             - matchExpressions:
               - key: node-role.kubernetes.io/control-plane
                 operator: DoesNotExist
-        # 2. 👈 鋼鐵防線：Pod 反親和性！強迫 K8s 絕對不允許在同一台機器上塞兩個 app Pod，徹底避免實體 3000 埠衝突！
         podAntiAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
           - labelSelector:
@@ -201,7 +198,7 @@ spec:
         imagePullPolicy: Never                  
         ports:
         - containerPort: 3000
-          hostPort: 3000      # 👈 終極通關密技：直接把容器的 3000 埠對接到當前實體機的 3000 埠上！
+          hostPort: 3000      # 👈 hostPort 核心對接通道
           protocol: TCP
         resources:
           limits:
@@ -222,13 +219,13 @@ spec:
             fieldRef:
               fieldPath: status.hostIP
         - name: REDIS_HOST
-          value: "$(K8S_NODE_IP)" # 自動連接當前節點實體機上的 Redis
+          value: "$(K8S_NODE_IP)" 
         - name: REDIS_PORT
           value: "6379"
         - name: REDIS_DB
           value: "0"
         - name: HOST
-          value: "127.0.0.1" # 👈 安全鎖死在 localhost！外網實體網路完全打不進 3000，只有同機 Caddy 能連！
+          value: "0.0.0.0" # 👈 關鍵修正：必須聽在 0.0.0.0 才能成功吃進 hostPort 映射過來的流量！
         - name: PORT
           value: "3000"
         readinessProbe:
@@ -250,4 +247,3 @@ spec:
       - name: tz
         hostPath:
           path: /etc/localtime
-# ⚠️ 注意：這裡底部完全沒有第 5 部分 Service 的任何東西！徹底連根拔除！我們再也不需要故障的 K3s 虛擬轉發層了！
