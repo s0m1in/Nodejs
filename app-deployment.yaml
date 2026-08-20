@@ -178,8 +178,6 @@ spec:
           value: "32768"
         - name: net.ipv4.tcp_max_syn_backlog
           value: "16384"
-        - name: net.ipv4.tcp_tw_reuse
-          value: "1"
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
