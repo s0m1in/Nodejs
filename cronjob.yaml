@@ -10,8 +10,6 @@ spec:
     spec:
       template:
         spec:
-          nodeSelector:
-            kubernetes.io/hostname: chunk01 
           restartPolicy: OnFailure
           hostAliases:
           - ip: "10.99.99.1"
@@ -43,8 +41,6 @@ spec:
     spec:
       template:
         spec:
-          nodeSelector:
-            kubernetes.io/hostname: chunk01 
           restartPolicy: OnFailure
           hostAliases:
           - ip: "10.99.99.1"
