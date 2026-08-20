@@ -230,7 +230,7 @@ spec:
         volumeMounts:
         - name: env-file
           mountPath: /app/.env 
-          subPath: env_v1
+          subPath: .env
         - name: tz
           mountPath: /etc/localtime
           readOnly: true
@@ -238,6 +238,9 @@ spec:
       - name: env-file
         secret:
           secretName: env-v6
+          items:
+          - key: env_v1
+            path: .env
       - name: tz
         hostPath:
           path: /etc/localtime
