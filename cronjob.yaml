@@ -11,7 +11,6 @@ spec:
       template:
         spec:
           nodeSelector:
-            # 👈 關鍵：用主控台或特定主機的 hostname 標籤，限定它在指定機器上跑
             kubernetes.io/hostname: chunk01 
           restartPolicy: OnFailure
           hostAliases:
@@ -20,7 +19,8 @@ spec:
             - "postgres"
           containers:
           - name: report
-            image: new-app:latest
+            image: docker.io/library/new-app:latest
+            imagePullPolicy: Never
             command: ["/nodejs/bin/node", "/app/scripts/entrypoint.js", "/nodejs/bin/node", "/app/scripts/telegram-report.js", "hourly"]
             volumeMounts:
             - name: env-file
@@ -29,7 +29,7 @@ spec:
           volumes:
           - name: env-file
             secret:
-              secretName: env-v4
+              secretName: env-v6 
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -44,7 +44,7 @@ spec:
       template:
         spec:
           nodeSelector:
-            kubernetes.io/hostname: chunk01
+            kubernetes.io/hostname: chunk01 
           restartPolicy: OnFailure
           hostAliases:
           - ip: "10.99.99.1"
@@ -52,7 +52,8 @@ spec:
             - "postgres"
           containers:
           - name: report
-            image: new-app:latest
+            image: docker.io/library/new-app:latest
+            imagePullPolicy: Never
             command: ["/nodejs/bin/node", "/app/scripts/entrypoint.js", "/nodejs/bin/node", "/app/scripts/telegram-report.js", "daily"]
             volumeMounts:
             - name: env-file
@@ -61,4 +62,4 @@ spec:
           volumes:
           - name: env-file
             secret:
-              secretName: env-v4
+              secretName: env-v6
