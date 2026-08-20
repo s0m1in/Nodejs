@@ -112,7 +112,7 @@ spec:
       labels:
         app: waf
     spec:
-      hostNetwork: true # 👈 WAF 保持 Host 模式，免除 K3s 權限限制，完美合法監聽實體外網 80/8080 埠
+      hostNetwork: true # 聽在實體外網 80/8080
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -150,7 +150,7 @@ spec:
           path: /etc/localtime
 ---
 # ==========================================
-# 4. APP (正宗 K8s 水平擴充 Deployment，無 PM2 單點故障)
+# 4. APP (正宗 K8s 故障隔離型 Deployment)
 # ==========================================
 apiVersion: apps/v1
 kind: Deployment
@@ -158,12 +158,13 @@ metadata:
   name: app
   namespace: default
 spec:
-  replicas: 2 # 💡 未來擴展至 8 個、16 個 Pod 直接修改此處即可，享有 K8s 原生最高級別防護與水平擴充！
+  replicas: 2 # 💡 叢集內有幾台 Worker 就設幾複本（如 2）。單機擴充效能改用容器內 cluster 機制
+  # 👇 關鍵優化：因為要佔用實體 3000 hostPort，更新時必須先刪後開，空出埠號，ArgoCD 永不卡死
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxSurge: 1        # 先開一個新 Pod
-      maxUnavailable: 0  # 舊的不能先關，確保更新時流量不中斷
+      maxSurge: 0        
+      maxUnavailable: 1  
   selector:
     matchLabels:
       app: app
@@ -172,22 +173,36 @@ spec:
       labels:
         app: app
     spec:
-      # 💡 拿掉 hostNetwork，回歸 K8s 標準平面，多個 Pod 同時聽 3000 埠絕對不搶 Ports
       affinity:
+        # 1. 限制只去 Worker 節點
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
             - matchExpressions:
               - key: node-role.kubernetes.io/control-plane
-                operator: DoesNotExist # 絕對不去 Master，只去 Worker 節點
+                operator: DoesNotExist
+        # 2. 👈 鋼鐵防線：Pod 反親和性！強迫 K8s 絕對不允許在同一台機器上塞兩個 app Pod，徹底避免實體 3000 埠衝突！
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - app
+            topologyKey: kubernetes.io/hostname
       hostAliases:
       - ip: "127.0.0.1" 
         hostnames:
-        - "postgres" # 對應主機網路上的 Pgbouncer
+        - "postgres" 
       containers:
       - name: app
         image: docker.io/library/new-app:latest 
         imagePullPolicy: Never                  
+        ports:
+        - containerPort: 3000
+          hostPort: 3000      # 👈 終極通關密技：直接把容器的 3000 埠對接到當前實體機的 3000 埠上！
+          protocol: TCP
         resources:
           limits:
             cpu: "1"
@@ -213,7 +228,7 @@ spec:
         - name: REDIS_DB
           value: "0"
         - name: HOST
-          value: "0.0.0.0" # 擴大監聽範圍，接收來自 Service NodePort 的流量
+          value: "127.0.0.1" # 👈 安全鎖死在 localhost！外網實體網路完全打不進 3000，只有同機 Caddy 能連！
         - name: PORT
           value: "3000"
         readinessProbe:
@@ -235,22 +250,4 @@ spec:
       - name: tz
         hostPath:
           path: /etc/localtime
----
-# ==========================================
-# 5. SERVICE (正宗 K8s NodePort 鋼鐵在地化通路)
-# ==========================================
-apiVersion: v1
-kind: Service
-metadata:
-  name: app-service
-  namespace: default
-spec:
-  type: NodePort                 
-  externalTrafficPolicy: Local   # ──► 核心關鍵：外部（包含HostNetwork WAF）從實體埠進來時，強制不跨機轉發！只給本機的這群 App Pod，100% 橫向流量鎖死！
-  selector:
-    app: app
-  ports:
-    - protocol: TCP
-      port: 3000                 
-      targetPort: 3000           
-      nodePort: 30000            # 👈 固定實體主機轉發通道，避開所有網域與環境變數解析亂源
+# ⚠️ 注意：這裡底部完全沒有第 5 部分 Service 的任何東西！徹底連根拔除！我們再也不需要故障的 K3s 虛擬轉發層了！
