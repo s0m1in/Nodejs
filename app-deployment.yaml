@@ -112,8 +112,7 @@ spec:
       labels:
         app: waf
     spec:
-      hostNetwork: true # 👈 WAF 保持 Host 模式，合法監聽實體機 80/8080
-      dnsPolicy: ClusterFirstWithHostNet # 👈 關鍵防線 1：強迫 Host 空間容器優先吃 K8s 大腦 CoreDNS，打通域名解析！
+      hostNetwork: true # 👈 WAF 保持 Host 模式，免除 K3s 權限限制，完美合法監聽實體外網 80/8080 埠
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -151,7 +150,7 @@ spec:
           path: /etc/localtime
 ---
 # ==========================================
-# 4. APP (Deployment 模式，支援擴充 8 Pod)
+# 4. APP (正宗 K8s 水平擴充 Deployment，無 PM2 單點故障)
 # ==========================================
 apiVersion: apps/v1
 kind: Deployment
@@ -159,12 +158,12 @@ metadata:
   name: app
   namespace: default
 spec:
-  replicas: 2 # 💡 未來要開 8 個、16 個 Pod 直接改這裡，K8s 虛擬網卡會自動分派，絕不搶主機 Ports
+  replicas: 2 # 💡 未來擴展至 8 個、16 個 Pod 直接修改此處即可，享有 K8s 原生最高級別防護與水平擴充！
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxSurge: 1        # 💡 先開新 Pod 再關舊 Pod，更新時完全零中斷
-      maxUnavailable: 0  
+      maxSurge: 1        # 先開一個新 Pod
+      maxUnavailable: 0  # 舊的不能先關，確保更新時流量不中斷
   selector:
     matchLabels:
       app: app
@@ -173,17 +172,18 @@ spec:
       labels:
         app: app
     spec:
+      # 💡 拿掉 hostNetwork，回歸 K8s 標準平面，多個 Pod 同時聽 3000 埠絕對不搶 Ports
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
             - matchExpressions:
               - key: node-role.kubernetes.io/control-plane
-                operator: DoesNotExist
+                operator: DoesNotExist # 絕對不去 Master，只去 Worker 節點
       hostAliases:
       - ip: "127.0.0.1" 
         hostnames:
-        - "postgres" 
+        - "postgres" # 對應主機網路上的 Pgbouncer
       containers:
       - name: app
         image: docker.io/library/new-app:latest 
@@ -213,7 +213,7 @@ spec:
         - name: REDIS_DB
           value: "0"
         - name: HOST
-          value: "0.0.0.0" # 👈 改為 0.0.0.0，允許 K8s 虛擬 Service 流量進入
+          value: "0.0.0.0" # 擴大監聽範圍，接收來自 Service NodePort 的流量
         - name: PORT
           value: "3000"
         readinessProbe:
@@ -237,7 +237,7 @@ spec:
           path: /etc/localtime
 ---
 # ==========================================
-# 5. SERVICE (正宗雲原生在地化 Service)
+# 5. SERVICE (正宗 K8s NodePort 鋼鐵在地化通路)
 # ==========================================
 apiVersion: v1
 kind: Service
@@ -245,11 +245,12 @@ metadata:
   name: app-service
   namespace: default
 spec:
-  type: ClusterIP                # 👈 回歸標準虛擬 IP。外部找不到 3000，安全性 100%
-  internalTrafficPolicy: Local   # ──► 關鍵防線 2：流量鎖死在本機！Kube-proxy 會強制此流量「絕對不跨機器轉發」
+  type: NodePort                 
+  externalTrafficPolicy: Local   # ──► 核心關鍵：外部（包含HostNetwork WAF）從實體埠進來時，強制不跨機轉發！只給本機的這群 App Pod，100% 橫向流量鎖死！
   selector:
     app: app
   ports:
     - protocol: TCP
       port: 3000                 
       targetPort: 3000           
+      nodePort: 30000            # 👈 固定實體主機轉發通道，避開所有網域與環境變數解析亂源
