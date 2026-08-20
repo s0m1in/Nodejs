@@ -160,6 +160,9 @@ metadata:
   namespace: default
 spec:
   replicas: 4 # 👈 關鍵 2：直接填入您想要的總 Pod 數。2台 Worker 就會自動跑 2+2=4 個 Pod
+  # 🏆 核心修正：強迫 K8s 先砍掉舊 Pod，釋放 Worker 空間後，再精準遞補新 Pod
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: app
