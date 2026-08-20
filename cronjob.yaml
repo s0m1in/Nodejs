@@ -19,7 +19,7 @@ spec:
           - name: report
             image: docker.io/library/new-app:latest
             imagePullPolicy: Never
-            command: ["/nodejs/bin/node", "/app/scripts/entrypoint.js", "/nodejs/bin/node", "/app/scripts/telegram-report.js", "hourly"]
+            command: ["/nodejs/bin/node", "/app/scripts/telegram-report.js", "hourly"]
             volumeMounts:
             - name: env-file
               mountPath: /app/.env
@@ -50,7 +50,7 @@ spec:
           - name: report
             image: docker.io/library/new-app:latest
             imagePullPolicy: Never
-            command: ["/nodejs/bin/node", "/app/scripts/entrypoint.js", "/nodejs/bin/node", "/app/scripts/telegram-report.js", "daily"]
+            command: ["/nodejs/bin/node", "/app/scripts/telegram-report.js", "daily"]
             volumeMounts:
             - name: env-file
               mountPath: /app/.env
