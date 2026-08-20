@@ -112,7 +112,8 @@ spec:
       labels:
         app: waf
     spec:
-      hostNetwork: true # 聽在實體外網 80/8080 埠，精準保留真實 IP
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
