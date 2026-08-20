@@ -177,8 +177,10 @@ spec:
       hostAliases:
       - ip: "127.0.0.1" 
         hostnames:
-        - "postgres" 
         - "redis"
+      - ip: "10.99.99.1"
+        hostnames:
+        - "postgres"
       containers:
       - name: app
         image: docker.io/library/new-app:latest 
