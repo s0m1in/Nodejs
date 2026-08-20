@@ -150,14 +150,15 @@ spec:
           path: /etc/localtime
 ---
 # ==========================================
-# 4. APP (正宗 K8s DaemonSet 模式，與 WAF 共享最高速主機平面)
+# 4. APP (Next.js Standalone 進化版 Deployment)
 # ==========================================
 apiVersion: apps/v1
-kind: DaemonSet # 👈 關鍵：強迫每台 Worker 必跑一套，自成獨立閉環
+kind: Deployment # 👈 關鍵 1：改為 Deployment，解鎖自由調整 Pod 數量的限制
 metadata:
   name: app
   namespace: default
 spec:
+  replicas: 4 # 👈 關鍵 2：直接填入您想要的總 Pod 數。2台 Worker 就會自動跑 2+2=4 個 Pod
   selector:
     matchLabels:
       app: app
@@ -166,7 +167,7 @@ spec:
       labels:
         app: app
     spec:
-      hostNetwork: true # 👈 終極黃金通關：直接與 Caddy 共享主機網路，100% 免疫虛擬網卡卡死！
+      hostNetwork: false # 👈 關鍵 3：必須關閉主機網路！改走 K8s 虛擬網路，同主機的多個 Pod 才不會互撞 Port 3000
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -174,8 +175,18 @@ spec:
             - matchExpressions:
               - key: node-role.kubernetes.io/control-plane
                 operator: DoesNotExist # 絕對不去 Master
+      
+      # 👈 關鍵 4：拓撲均勻分佈核心！強迫 4 個 Pod 必須絕對平均、對稱地落入 2 台 Worker 裡（2+2）
+      topologySpreadConstraints:
+      - maxSkew: 1                           # 兩台主機的 Pod 數量相差絕對不能超過 1
+        topologyKey: kubernetes.io/hostname   # 以主機名稱作為分配維度
+        whenUnsatisfiable: DoNotSchedule      # 硬性限制，分不平寧可不啟動，確保「各別鎖死同一台」
+        labelSelector:
+          matchLabels:
+            app: app
+
       hostAliases:
-      - ip: "127.0.0.1" 
+      - ip: "172.17.0.1" # 👈 關鍵 5：K3s 預設宿主機網閘，讓躲在虛擬網路的 Next.js 能連同機實體平面的 Redis
         hostnames:
         - "redis"
       - ip: "10.99.99.1"
@@ -185,6 +196,8 @@ spec:
       - name: app
         image: docker.io/library/new-app:latest 
         imagePullPolicy: Never                  
+        ports:
+        - containerPort: 3000
         resources:
           limits:
             cpu: "1"
@@ -205,10 +218,10 @@ spec:
           value: "6379"
         - name: REDIS_DB
           value: "0"
-        - name: HOST
-          value: "127.0.0.1" # 👈 專家級修正：鎖死在 127.0.0.1！外網實體網路絕對摸不到 3000，只有同機 WAF 能連！
+        - name: HOSTNAME
+          value: "0.0.0.0" # 👈 對應您的 server.js：讓 Next.js 接受來自外部（WAF）的連線
         - name: PORT
-          value: "3000"
+          value: "3000"    # 👈 對應您的 server.js：保持預設 3000，完全不用動程式碼！
         readinessProbe:
           exec:
             command: ["/nodejs/bin/node", "-e", "require('net').createConnection(3000, '127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
@@ -228,3 +241,22 @@ spec:
       - name: tz
         hostPath:
           path: /etc/localtime
+
+---
+# ==========================================
+# 4.1 APP 專屬「零損耗」Headless Service
+# ==========================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: app-headless
+  namespace: default
+spec:
+  clusterIP: None # 👈 關鍵：設定為 None，徹底拔除 K8s 網路層的效能損耗！
+  selector:
+    app: app
+  ports:
+  - protocol: TCP
+    port: 3000
+    targetPort: 3000
+  internalTrafficPolicy: Local # 👈 關鍵鎖死：Caddy 查 DNS 時，K3s 只會回傳「目前這台機器上」的 Pod IP，絕不跨機
