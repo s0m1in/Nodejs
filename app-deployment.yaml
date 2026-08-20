@@ -112,7 +112,7 @@ spec:
       labels:
         app: waf
     spec:
-      hostNetwork: true # 聽在實體外網 80/8080
+      hostNetwork: true # 聽在實體外網 80/8080 埠，精準保留真實 IP
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -150,20 +150,14 @@ spec:
           path: /etc/localtime
 ---
 # ==========================================
-# 4. APP (正宗 K8s 故障隔離型 Deployment)
+# 4. APP (正宗 K8s DaemonSet 模式，與 WAF 共享最高速主機平面)
 # ==========================================
 apiVersion: apps/v1
-kind: Deployment
+kind: DaemonSet # 👈 關鍵：強迫每台 Worker 必跑一套，自成獨立閉環
 metadata:
   name: app
   namespace: default
 spec:
-  replicas: 2 # 💡 叢集內有幾台 Worker 就設幾複本（如 2）。
-  strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxSurge: 0        
-      maxUnavailable: 1  
   selector:
     matchLabels:
       app: app
@@ -172,34 +166,23 @@ spec:
       labels:
         app: app
     spec:
+      hostNetwork: true # 👈 終極黃金通關：直接與 Caddy 共享主機網路，100% 免疫虛擬網卡卡死！
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
             - matchExpressions:
               - key: node-role.kubernetes.io/control-plane
-                operator: DoesNotExist
-        podAntiAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-          - labelSelector:
-              matchExpressions:
-              - key: app
-                operator: In
-                values:
-                - app
-            topologyKey: kubernetes.io/hostname
+                operator: DoesNotExist # 絕對不去 Master
       hostAliases:
       - ip: "127.0.0.1" 
         hostnames:
         - "postgres" 
+        - "redis"
       containers:
       - name: app
         image: docker.io/library/new-app:latest 
         imagePullPolicy: Never                  
-        ports:
-        - containerPort: 3000
-          hostPort: 3000      # 👈 hostPort 核心對接通道
-          protocol: TCP
         resources:
           limits:
             cpu: "1"
@@ -214,23 +197,19 @@ spec:
           value: "--max-old-space-size=768"
         - name: NODE_ENV
           value: "production"
-        - name: K8S_NODE_IP
-          valueFrom:
-            fieldRef:
-              fieldPath: status.hostIP
         - name: REDIS_HOST
-          value: "$(K8S_NODE_IP)" 
+          value: "redis"
         - name: REDIS_PORT
           value: "6379"
         - name: REDIS_DB
           value: "0"
         - name: HOST
-          value: "0.0.0.0" # 👈 關鍵修正：必須聽在 0.0.0.0 才能成功吃進 hostPort 映射過來的流量！
+          value: "127.0.0.1" # 👈 專家級修正：鎖死在 127.0.0.1！外網實體網路絕對摸不到 3000，只有同機 WAF 能連！
         - name: PORT
           value: "3000"
         readinessProbe:
           exec:
-            command: ["/nodejs/bin/node", "-e", "require('net').createConnection(3000).on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
+            command: ["/nodejs/bin/node", "-e", "require('net').createConnection(3000, '127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
           periodSeconds: 10
           timeoutSeconds: 3
         volumeMounts:
