@@ -15,14 +15,14 @@ spec:
       labels:
         app: pgbouncer
     spec:
-      hostNetwork: true # 👈 關鍵：對應 mode: host，直接綁定在實體機的 6432
+      hostNetwork: true
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
             - matchExpressions:
               - key: node-role.kubernetes.io/control-plane
-                operator: DoesNotExist # 👈 關鍵：絕對不去 Master，只去 Worker
+                operator: DoesNotExist
       containers:
       - name: pgbouncer
         image: edoburu/pgbouncer:latest
@@ -32,7 +32,7 @@ spec:
             memory: 256Mi
         securityContext:
           capabilities:
-            add: ["SYS_RESOURCE"] # 允許提高 ulimits
+            add: ["SYS_RESOURCE"]
         volumeMounts:
         - name: config
           mountPath: /etc/pgbouncer/pgbouncer.ini
@@ -65,7 +65,7 @@ spec:
       labels:
         app: redis
     spec:
-      hostNetwork: true # 👈 關鍵修正：Swarm 轉 K8s 漏掉這行會使 App 找不到實體機上的 Redis
+      hostNetwork: true 
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -112,7 +112,8 @@ spec:
       labels:
         app: waf
     spec:
-      # 💡 關鍵優化：拿掉 hostNetwork，讓 Caddy 進入 K8s 標準網路空間，徹底解決 404 與 DNS 阻斷
+      hostNetwork: true # 👈 保持 Host 模式，免去 K3s 權限限制，完美合法聽在實體機 80/443
+      dnsPolicy: ClusterFirstWithHostNet # 👈 關鍵防線 1：強迫 Host 容器共享 K8s 內部 CoreDNS 解析！
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -150,31 +151,6 @@ spec:
           path: /etc/localtime
 ---
 # ==========================================
-# 3b. WAF-SERVICE (外網實體機入口無縫對接)
-# ==========================================
-apiVersion: v1
-kind: Service
-metadata:
-  name: waf-service
-  namespace: default
-spec:
-  type: NodePort
-  externalTrafficPolicy: Local # 👈 核心關鍵：外部流量進到這台 Worker，直接交給同台 Worker 的 Caddy，精準抓到真實 IP！
-  selector:
-    app: waf
-  ports:
-    - name: http
-      protocol: TCP
-      port: 80
-      targetPort: 80
-      nodePort: 80            # 👈 鎖死實體主機對外的 80 埠
-    - name: alt-http
-      protocol: TCP
-      port: 8080
-      targetPort: 8080
-      nodePort: 8080          # 👈 鎖死實體主機對外的 8080 埠
----
-# ==========================================
 # 4. APP (原本的 replicated 模式 -> Deployment)
 # ==========================================
 apiVersion: apps/v1
@@ -183,12 +159,12 @@ metadata:
   name: app
   namespace: default
 spec:
-  replicas: 2 # 💡 未來單機要擴充成 8 個 Pod 直接在此修改即可，埠號永不衝突
+  replicas: 2 # 💡 支援單機無限擴充 8 個或更多 Pod，埠號完全不衝突！
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxSurge: 1        # 先開一個新 Pod
-      maxUnavailable: 0  # 舊的不能先關，確保更新時流量不中斷
+      maxSurge: 1        # 💡 先開新 Pod，完美支援零中斷平滑更新
+      maxUnavailable: 0  
   selector:
     matchLabels:
       app: app
@@ -203,12 +179,11 @@ spec:
             nodeSelectorTerms:
             - matchExpressions:
               - key: node-role.kubernetes.io/control-plane
-                operator: DoesNotExist # 絕對不去 Master，只去 Worker 節點
-      # 💡 內聯 DNS：利用動態環境變數，自動對接本機實體 IP
+                operator: DoesNotExist
       hostAliases:
       - ip: "127.0.0.1" 
         hostnames:
-        - "postgres" # 對應主機網路上的 Pgbouncer
+        - "postgres" 
       containers:
       - name: app
         image: docker.io/library/new-app:latest 
@@ -227,28 +202,20 @@ spec:
           value: "--max-old-space-size=768"
         - name: NODE_ENV
           value: "production"
-          
-        # 👈 動態獲取當前 Pod 所在的實體 Worker 機器的內網 IP
         - name: K8S_NODE_IP
           valueFrom:
             fieldRef:
               fieldPath: status.hostIP
-
-        # 👈 利用剛拿到的實體機 IP 完美對接 HostNetwork 的 Redis
         - name: REDIS_HOST
-          value: "$(K8S_NODE_IP)"
+          value: "$(K8S_NODE_IP)" # 動態綁定本機 Redis
         - name: REDIS_PORT
           value: "6379"
         - name: REDIS_DB
           value: "0"
-          
-        # 👈 擴大 Node.js 框架監聽範圍，允許 K8s 內部網卡流量打入
         - name: HOST
-          value: "0.0.0.0"
+          value: "0.0.0.0" # 擴大監聽，允許 Service 流量灌入
         - name: PORT
           value: "3000"
-          
-        # 完美綁定您的 Node.js 健康檢查機制
         readinessProbe:
           exec:
             command: ["/nodejs/bin/node", "-e", "require('net').createConnection(3000).on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
@@ -270,7 +237,7 @@ spec:
           path: /etc/localtime
 ---
 # ==========================================
-# 5. SERVICE (鎖死跨節點流量，流量在地化)
+# 5. SERVICE (無頭模式，徹底消滅虛擬網卡死鎖)
 # ==========================================
 apiVersion: v1
 kind: Service
@@ -278,8 +245,8 @@ metadata:
   name: app-service
   namespace: default
 spec:
-  type: ClusterIP                # 👈 回歸標準的常規虛擬 IP 模式，穩定性最高
-  internalTrafficPolicy: Local   # ──► 核心關鍵：WAF 呼叫此 Service 時，絕對只會分流給本機的 App Pod 群，絕不跨機
+  clusterIP: None                # 👈 關鍵防線 2：改為 None！銷毀 10.43 亂源。外部找不到 3000，安全性封頂
+  internalTrafficPolicy: Local   # ──► 關鍵防線 3：鎖死在本機！DNS 絕對只會給出「當前這台機器」的 Pod IP 群
   selector:
     app: app
   ports:
