@@ -19,15 +19,17 @@ spec:
           - name: report
             image: docker.io/library/new-app:latest
             imagePullPolicy: Never
-            command: ["/nodejs/bin/node", "/app/scripts/telegram-report.js", "hourly"]
+            command: ["/nodejs/bin/node", "/app/scripts/entrypoint.js", "/nodejs/bin/node", "/app/scripts/telegram-report.js", "hourly"]
             volumeMounts:
             - name: env-file
-              mountPath: /app/.env
+              # 💡 👑 唯一精準修正：只改這行路徑！把檔案精準投遞到 entrypoint.js 死等的 Swarm 原生絕對路徑上！
+              # 這樣一開機它就能成功認出並讀取名為 env_v1 的檔案，自動去引號解鎖變數，直通 Prisma！
+              mountPath: /run/secrets/env_v1
               subPath: env_v1
           volumes:
           - name: env-file
             secret:
-              secretName: env-v6 
+              secretName: env-v6
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -50,10 +52,11 @@ spec:
           - name: report
             image: docker.io/library/new-app:latest
             imagePullPolicy: Never
-            command: ["/nodejs/bin/node", "/app/scripts/telegram-report.js", "daily"]
+            command: ["/nodejs/bin/node", "/app/scripts/entrypoint.js", "/nodejs/bin/node", "/app/scripts/telegram-report.js", "daily"]
             volumeMounts:
             - name: env-file
-              mountPath: /app/.env
+              # 💡 👑 唯一精準修正：只改這行路徑
+              mountPath: /run/secrets/env_v1
               subPath: env_v1
           volumes:
           - name: env-file
