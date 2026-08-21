@@ -5,6 +5,7 @@ metadata:
   namespace: default
 spec:
   schedule: "0 * * * *" # 每小時執行一次
+  timeZone: "Asia/Taipei"
   concurrencyPolicy: Forbid
   jobTemplate:
     spec:
@@ -38,6 +39,7 @@ metadata:
   namespace: default
 spec:
   schedule: "0 0 * * *" # 每天午夜執行一次
+  timeZone: "Asia/Taipei"
   concurrencyPolicy: Forbid
   jobTemplate:
     spec:
